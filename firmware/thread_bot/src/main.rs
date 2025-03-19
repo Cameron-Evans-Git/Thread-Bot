@@ -1,17 +1,24 @@
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
+mod tarjan;
+
 fn main() {
-    println!("Hello, world!");
     // Load & pre-process an image file
     // Send image to the pytorch server
     // unpack the .onnx
     // create thread bot instructions .tbi file
     // send .tbi file to thread bot as work order
+    //println!("{:?}", unpack_onnx());
+    generate_instructions(unpack_onnx());
 }
 
 fn unpack_onnx() -> Vec<f32> {
-    return vec![];
+    let mut rng = StdRng::seed_from_u64(0);
+    return (0..36).map(|_| rng.gen_range(0.0..1.0)).collect();
+    //return vec![];
 }
 
-// none of this has been tested lol
+
 fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
     // the thread bot will articulate the applicator just before reaching each nail
     // each instruction is a signed short containing the index of the nail to be visted next
@@ -40,12 +47,14 @@ fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
         panic!("Invalid ONNX file. Number of nails does not match number of connections");
     }
     // sum connections
-    let mut st_tracking: Vec<(i16, i16, u16)> = vec![(0, 0, 0); n as usize]; // (target, source, nail_id) connections for each nail
+    let mut st_tracking: Vec<(i16, i16, u16)> = vec![(0, 0, 0); n as usize]; // (target_count, source_count, nail_id) connections for each nail
     let mut inner_connections: Vec<(u16, u16)> = vec![]; // (target, source)
+    let mut s_count = 0;
     for i in 0..n {
         st_tracking[i as usize].2 = i;
-        for j in i+1..n {
-            let score: f32 = onnx[(i*n+j) as usize];
+        for j in i+1..n { 
+            let score: f32 = onnx[(s_count) as usize];
+            s_count += 1;
             if score < confidence_cutoff {
                 continue;
             }
@@ -60,6 +69,11 @@ fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
             }
         }
     }
+    let sccs = tarjan::tarjan_scc(&inner_connections);
+    println!("tarjan: {:?}", sccs);
+    println!("inner connections: {:?}", inner_connections);
+    println!("pre balanced source target tracking: {:?}", st_tracking);
+    panic!("done");
     // balance connections
     let mut outer_connections: Vec<(u16, u16)> = vec![]; // (target, source)
     loop {
@@ -67,58 +81,77 @@ fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
         if (st_tracking[0].0 - st_tracking[0].1) == 0 && (st_tracking[n as usize - 1].0 - st_tracking[n as usize -1].1) == 0 {
             break;
         }
+        let mut found_connection: bool = false;
         if -1*(st_tracking[0].0 - st_tracking[0].1) > (st_tracking[n as usize - 1].0 - st_tracking[n as usize -1].1) {
-            for i in 1..(n/2)+1 { // investigate half of the nails to match with most sourced nail
+            for i in 1..n+1 { // find nearest match for most sourced nail
                 let check_index = if i <= st_tracking[0].2 {st_tracking[0].2-i} else {n+st_tracking[0].2-i};
-                for j in n-1..1 {
+                for j in 0..n {
                     if st_tracking[j as usize].2 == check_index {
                         if st_tracking[j as usize].0 - st_tracking[j as usize].1 > 0 {
                             outer_connections.push((st_tracking[0].2, check_index));
                             st_tracking[j as usize].1 += 1;
                             st_tracking[0].0 += 1;
+                            found_connection = true;
                         }
                         break;
                     }
                 }
-                if i == st_tracking[0].2-(n/2) {
-                    panic!("No connection found for nail {}", st_tracking[0].2);
+                if found_connection {
+                    break;
                 }
             }
+            if !found_connection {
+                panic!("No connection found for nail {}", st_tracking[0].2);
+            }
         } else {
-            for i in 1..(n/2)+1 as u16 { // investigate half of the nails to match with most targeted nail
+            for i in 1..n+1 as u16 { // find nearest match for most targeted nail
                 let check_index = (st_tracking[n as usize - 1].2+i)%n;
-                for j in 0..n-1 {
+                for j in 0..n {
                     if st_tracking[j as usize].2 == check_index {
                         if st_tracking[j as usize].0 - st_tracking[j as usize].1 < 0 {
                             outer_connections.push((check_index, st_tracking[n as usize - 1].2));
                             st_tracking[j as usize].0 += 1;
                             st_tracking[n as usize - 1].1 += 1;
+                            found_connection = true;
                         }
                         break;
                     }
                 }
-                if i == st_tracking[n as usize - 1].2+(n/2) {
-                    panic!("No connection found for nail {}", st_tracking[n as usize - 1].2);
+                if found_connection {
+                    break;
                 }
+            }
+            if !found_connection {
+                panic!("No connection found for nail {}", st_tracking[n as usize - 1].2);
             }
         }
     }
 
-    // develop instructions from inner connections and outer_connections
+    println!("Outer Connections {:?}", outer_connections);
+    println!("post balanced source target tracking: {:?}", st_tracking);
+
+    // develop ordered instructions from inner connections and outer_connections
     // assume thread begins fastened to nail 0
     // this will fail if nail 0 has no connections TODO
     let mut instructions: Vec<i16> = vec![];
     let mut source_nail: u16 = 0;
     loop {
         st_tracking.sort_by(|a, b| (b.0).cmp(&(a.0))); // sort by decending number of incoming connections remaining
+        println!("source nail: {} st_tracking: {:?}", source_nail, st_tracking);
         if st_tracking[0].0 == 0 {
             break;
         }
         for i in 0..n {
             if st_tracking[i as usize].2 == source_nail {
+                if i == n-1 {
+                    panic!("No connection found for nail {}", source_nail);
+                }
                 continue;
             }
             if inner_connections.contains(&(st_tracking[i as usize].2, source_nail)) {
+                println!("inner connections: {:?}", inner_connections);
+                inner_connections.retain(|x| x != &(st_tracking[i as usize].2, source_nail));
+                println!("i:{} source_nail:{} inner connections: {:?}", i, source_nail, inner_connections);
                 instructions.push(st_tracking[i as usize].2 as i16);
                 st_tracking[i as usize].0 -= 1;
                 st_tracking[source_nail as usize].1 -= 1;
@@ -126,17 +159,18 @@ fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
                 break;
             }
             if outer_connections.contains(&(st_tracking[i as usize].2, source_nail)) {
+                println!("outer connections: {:?}", outer_connections);
+                outer_connections.retain(|x| x != &(st_tracking[i as usize].2, source_nail));
+                println!("i:{} source_nail:{} outer connections: {:?}", i, source_nail, outer_connections);
                 instructions.push(st_tracking[i as usize].2 as i16 * -1);
                 st_tracking[i as usize].0 -= 1;
                 st_tracking[source_nail as usize].1 -= 1;
                 source_nail = st_tracking[i as usize].2;
                 break;
             }
-            if i == n-1 {
-                panic!("No connection found for nail {}", source_nail);
-            }
         }
     }
+    println!("Instructions: {:?}", instructions);
 
     return instructions;
 }
