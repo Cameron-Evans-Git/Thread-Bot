@@ -81,24 +81,24 @@ pub fn tarjan_scc(edges: &Vec<(u16, u16)>) -> Vec<Vec<u16>> {
     sccs
 }
 
-fn main() {
-    // Example directed graph as a vector of edges
-    let edges = vec![
-        (0, 1),
-        (1, 2),
-        (2, 0),
-        (2, 3),
-        (3, 4),
-        (4, 5),
-        (5, 3),
-    ];
+// fn main() {
+//     // Example directed graph as a vector of edges
+//     let edges = vec![
+//         (0, 1),
+//         (1, 2),
+//         (2, 0),
+//         (2, 3),
+//         (3, 4),
+//         (4, 5),
+//         (5, 3),
+//     ];
 
-    // Find all SCCs using Tarjan's algorithm
-    let sccs = tarjan_scc(&edges);
+//     // Find all SCCs using Tarjan's algorithm
+//     let sccs = tarjan_scc(&edges);
 
-    // Print the SCCs
-    println!("Strongly Connected Components:");
-    for scc in sccs {
-        println!("{:?}", scc);
-    }
-}
+//     // Print the SCCs
+//     println!("Strongly Connected Components:");
+//     for scc in sccs {
+//         println!("{:?}", scc);
+//     }
+// }

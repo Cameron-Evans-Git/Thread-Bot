@@ -1,6 +1,7 @@
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 mod tarjan;
+mod hierholzer;
 
 fn main() {
     // Load & pre-process an image file
@@ -9,17 +10,17 @@ fn main() {
     // create thread bot instructions .tbi file
     // send .tbi file to thread bot as work order
     //println!("{:?}", unpack_onnx());
-    generate_instructions(unpack_onnx());
+    let path = generate_instructions(unpack_onnx());
 }
 
 fn unpack_onnx() -> Vec<f32> {
     let mut rng = StdRng::seed_from_u64(0);
-    return (0..36).map(|_| rng.gen_range(0.0..1.0)).collect();
+    return (0..4950).map(|_| rng.gen_range(0.0..1.0)).collect();
     //return vec![];
 }
 
 
-fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
+fn generate_instructions(onnx: Vec<f32>) -> Vec<u16> {
     // the thread bot will articulate the applicator just before reaching each nail
     // each instruction is a signed short containing the index of the nail to be visted next
     // positive if inter-canvas traversal should be made on the way to the target nail
@@ -73,7 +74,6 @@ fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
     println!("tarjan: {:?}", sccs);
     println!("inner connections: {:?}", inner_connections);
     println!("pre balanced source target tracking: {:?}", st_tracking);
-    panic!("done");
     // balance connections
     let mut outer_connections: Vec<(u16, u16)> = vec![]; // (target, source)
     loop {
@@ -129,48 +129,33 @@ fn generate_instructions(onnx: Vec<f32>) -> Vec<i16> {
 
     println!("Outer Connections {:?}", outer_connections);
     println!("post balanced source target tracking: {:?}", st_tracking);
+    let all_connections = inner_connections.iter().chain(outer_connections.iter()).cloned().collect::<Vec<(u16, u16)>>();
 
-    // develop ordered instructions from inner connections and outer_connections
-    // assume thread begins fastened to nail 0
-    // this will fail if nail 0 has no connections TODO
-    let mut instructions: Vec<i16> = vec![];
-    let mut source_nail: u16 = 0;
-    loop {
-        st_tracking.sort_by(|a, b| (b.0).cmp(&(a.0))); // sort by decending number of incoming connections remaining
-        println!("source nail: {} st_tracking: {:?}", source_nail, st_tracking);
-        if st_tracking[0].0 == 0 {
-            break;
+    let sccs = tarjan::tarjan_scc(&all_connections);
+    println!("updated tarjan: {:?}", sccs);
+
+    let mut path = hierholzer::hierholzer(&all_connections);
+    println!("hierholzer: {:?}, len: {}", path, path.len());
+    println!("inner con length: {} outer con length: {}", inner_connections.len(), outer_connections.len());
+
+    for i in 0..outer_connections.len() {
+        let mut found = false;
+        for j in 0..path.len()-1 {
+            if outer_connections[i].1 == path[j] && outer_connections[i].0 == path[j+1] {
+                path[j] += 0xF000;
+                found = true;
+                break;
+            }
         }
-        for i in 0..n {
-            if st_tracking[i as usize].2 == source_nail {
-                if i == n-1 {
-                    panic!("No connection found for nail {}", source_nail);
-                }
-                continue;
-            }
-            if inner_connections.contains(&(st_tracking[i as usize].2, source_nail)) {
-                println!("inner connections: {:?}", inner_connections);
-                inner_connections.retain(|x| x != &(st_tracking[i as usize].2, source_nail));
-                println!("i:{} source_nail:{} inner connections: {:?}", i, source_nail, inner_connections);
-                instructions.push(st_tracking[i as usize].2 as i16);
-                st_tracking[i as usize].0 -= 1;
-                st_tracking[source_nail as usize].1 -= 1;
-                source_nail = st_tracking[i as usize].2;
-                break;
-            }
-            if outer_connections.contains(&(st_tracking[i as usize].2, source_nail)) {
-                println!("outer connections: {:?}", outer_connections);
-                outer_connections.retain(|x| x != &(st_tracking[i as usize].2, source_nail));
-                println!("i:{} source_nail:{} outer connections: {:?}", i, source_nail, outer_connections);
-                instructions.push(st_tracking[i as usize].2 as i16 * -1);
-                st_tracking[i as usize].0 -= 1;
-                st_tracking[source_nail as usize].1 -= 1;
-                source_nail = st_tracking[i as usize].2;
-                break;
-            }
+        if !found {
+            panic!("Outer connection not found in path");
         }
     }
-    println!("Instructions: {:?}", instructions);
 
-    return instructions;
+    println!("final path: {:?}", path);
+
+    // add something to validate the path
+    
+
+    return path;
 }
