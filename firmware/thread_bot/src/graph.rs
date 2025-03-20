@@ -1,16 +1,17 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EdgeType {
     Original, // Original edge in the graph
     Added,    // Edge added by ensure_eulerian_cycle()
 }
 
 pub struct Graph {
-    adjacency_list: HashMap<u16, Vec<(u16, EdgeType)>>, // Store edges with their type
+    adjacency_list: HashMap<u16, Vec<(u16, EdgeType, u32)>>, // Store edges with their type and count
 }
 
 impl Graph {
+    // Create a new graph with a specified number of nodes
     pub fn new(n: u16) -> Self {
         let mut graph = Graph {
             adjacency_list: HashMap::new(),
@@ -26,16 +27,22 @@ impl Graph {
         self.adjacency_list.entry(node).or_insert_with(Vec::new);
     }
 
-    // Add a directed edge from `source` to `target` with a specified type
-    pub fn add_edge(&mut self, source: u16, target: u16, edge_type: EdgeType) {
-        self.adjacency_list
-            .entry(source)
-            .or_insert_with(Vec::new)
-            .push((target, edge_type));
+    // Add a directed edge from `source` to `target` with a specified type and count
+    pub fn add_edge(&mut self, source: u16, target: u16, edge_type: EdgeType, count: u32) {
+        if let Some(neighbors) = self.adjacency_list.get_mut(&source) {
+            // Check if the edge already exists
+            if let Some(edge) = neighbors.iter_mut().find(|e| e.0 == target && e.1 == edge_type) {
+                // Increment the count if the edge already exists
+                edge.2 += count;
+            } else {
+                // Add a new edge with the specified count
+                neighbors.push((target, edge_type, count));
+            }
+        }
     }
 
     // Get the neighbors of a node
-    fn neighbors(&self, node: u16) -> Option<&Vec<(u16, EdgeType)>> {
+    fn neighbors(&self, node: u16) -> Option<&Vec<(u16, EdgeType, u32)>> {
         self.adjacency_list.get(&node)
     }
 
@@ -50,7 +57,8 @@ impl Graph {
     fn calculate_degrees(&self) -> HashMap<u16, usize> {
         let mut degrees = HashMap::new();
         for (&node, neighbors) in &self.adjacency_list {
-            degrees.insert(node, neighbors.len());
+            let degree = neighbors.iter().map(|(_, _, count)| *count as usize).sum();
+            degrees.insert(node, degree);
         }
         degrees
     }
@@ -70,10 +78,10 @@ impl Graph {
         if node == target {
             return u32::MAX; // Node cannot connect to itself
         }
-    
+
         let len = self.adjacency_list.len() as u16;
         let half_len = len / 2;
-    
+
         if node > target {
             if node - target <= half_len {
                 u32::MAX
@@ -153,7 +161,7 @@ impl Graph {
 
             // Visit all neighbors
             if let Some(neighbors) = graph.neighbors(node) {
-                for &(neighbor, _) in neighbors {
+                for &(neighbor, _, _) in neighbors {
                     if !indices.contains_key(&neighbor) {
                         // Neighbor has not been visited, recurse
                         strong_connect(neighbor, graph, index, indices, low_links, stack, on_stack, sccs);
@@ -192,11 +200,11 @@ impl Graph {
     }
 
     // Ensure the graph has an Eulerian cycle by modifying the adjacency_list
-    pub fn ensure_eulerian_cycle(&mut self) {
+    pub fn make_eulerian(&mut self) {
         // Step 1: Make all node degrees even
         let needed_edges = self.find_needed_edges();
         for (source, target) in needed_edges {
-            self.add_edge(source, target, EdgeType::Added); // Mark as added edge
+            self.add_edge(source, target, EdgeType::Added, 1); // Mark as added edge
         }
 
         // Step 2: Ensure the graph is strongly connected
@@ -221,7 +229,7 @@ impl Graph {
                 }
 
                 // Add the edge to connect the SCCs
-                self.add_edge(best_edge.0, best_edge.1, EdgeType::Added); // Mark as added edge
+                self.add_edge(best_edge.0, best_edge.1, EdgeType::Added, 1); // Mark as added edge
             }
         }
     }
@@ -236,10 +244,16 @@ impl Graph {
         while let Some(&current) = stack.last() {
             if let Some(neighbors) = graph.get_mut(&current) {
                 if !neighbors.is_empty() {
-                    // Push the next neighbor onto the stack
-                    let (next, edge_type) = neighbors.pop().unwrap();
-                    stack.push(next);
-                    path.push((current, edge_type)); // Record the edge type
+                    // Pop the next neighbor and decrement its count
+                    let (next, edge_type, count) = neighbors.last_mut().unwrap();
+                    
+                    stack.push(*next);
+                    path.push((current, *edge_type)); // Record the edge type
+
+                    *count -= 1;
+                    if *count == 0 {
+                        neighbors.pop(); // Remove the edge if its count reaches 0
+                    }
                 } else {
                     // No more neighbors, backtrack
                     stack.pop();
@@ -253,29 +267,3 @@ impl Graph {
         path
     }
 }
-
-// fn main() {
-//     let mut graph = Graph::new();
-
-//     // Add nodes
-//     graph.add_node(0);
-//     graph.add_node(1);
-//     graph.add_node(2);
-//     graph.add_node(3);
-
-//     // Add original edges
-//     graph.add_edge(0, 1, EdgeType::Original);
-//     graph.add_edge(1, 2, EdgeType::Original);
-//     graph.add_edge(2, 3, EdgeType::Original);
-//     graph.add_edge(3, 0, EdgeType::Original);
-
-//     // Ensure the graph has an Eulerian cycle
-//     graph.ensure_eulerian_cycle();
-
-//     // Print the modified graph
-//     graph.print();
-
-//     // Find the Eulerian cycle starting at Node 0
-//     let eulerian_cycle = graph.hierholzer(0);
-//     println!("Eulerian Cycle with Edge Types: {:?}", eulerian_cycle);
-// }
