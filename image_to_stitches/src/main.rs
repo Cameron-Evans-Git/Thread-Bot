@@ -47,7 +47,7 @@ fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>
 
         population.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         println!("Generation {}: Best fitness: {}", _gen, population[0].0);
-        //keep parent_count best parents for next generation and cross-breed the rest
+        //keep parent_count best parents for next generation and cross-breed/mutate the rest
         for i in 0..parent_count {
             for j in i+1..parent_count {
                 let mut child = (-1.0 as f64, population[i].1.clone());

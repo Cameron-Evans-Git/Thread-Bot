@@ -18,12 +18,12 @@ impl StringCanvas {
         for i1 in 0.._nail_count {
             let mut middle_map = HashMap::new();
             let radians1 = 2.0 * pi * i1 as f64 / _nail_count as f64;
-            let xy1 = (radius * radians1.cos(), radius * radians1.sin());
+            let xy1 = ((radius - 1.0) * radians1.cos(), (radius - 1.0) * radians1.sin());
             for j in 2..(_nail_count+1)/2 {
                 let mut inner_map = HashMap::new();
                 let i2 = (i1 + j) % _nail_count;
                 let radians2 = 2.0 * pi * i2 as f64 / _nail_count as f64;
-                let xy2 = (radius * radians2.cos(), radius * radians2.sin());
+                let xy2 = ((radius - 1.0) * radians2.cos(), (radius - 1.0) * radians2.sin());
                 let true_distance = ((xy1.0 - xy2.0).powi(2) + (xy1.1 - xy2.1).powi(2)).sqrt();
                 let bresenham: Vec<_> = Bresenham::new(
                     (xy1.0 as isize, xy1.1 as isize),
@@ -31,7 +31,7 @@ impl StringCanvas {
                 ).collect();
                 let ink = 255.0 * bresenham.len() as f64 / true_distance; // POTENTIAL FOR IMPROVEMENT, BASE INK ON DISTANCE TO TRUE LINE
                 for (x, y) in bresenham {
-                    let flat_index = ((x + radius as isize) + ((y - radius as isize) * -1)) as usize * _resolution;
+                    let flat_index: usize = (x + radius as isize) as usize + (((y - radius as isize) * -1) as usize * _resolution);
                     assert!(flat_index < _resolution * _resolution);
                     inner_map.insert(flat_index, ink);
                 }
@@ -66,6 +66,6 @@ impl StringCanvas {
                 return inner_map;
             }
         }
-        panic!("Stitch not found for source: {} and target: {}", source, target);
+        panic!("Stitch not found for source: {} and target: {}!\nWhy are you asking?", source, target);
     }
 }
