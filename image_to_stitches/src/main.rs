@@ -61,7 +61,7 @@ fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>
 
 fn bitset_to_vec(bitset: &FixedBitSet, canvas: &string_canvas::StringCanvas) -> Vec<u8> {
     assert!(bitset.len() == canvas.count, "Bitset length does not match canvas count");
-    let mut drawing = vec![0 as u8; RESOLUTION*RESOLUTION];
+    let mut drawing = vec![255 as u8; RESOLUTION*RESOLUTION];
     let mut source: usize = 0;
     let mut target: usize = 1;
     let mut prev_ind: usize = 0;
@@ -78,7 +78,12 @@ fn bitset_to_vec(bitset: &FixedBitSet, canvas: &string_canvas::StringCanvas) -> 
             }
         }
         for (flat_index, ink) in canvas.get_stitch(source, target).into_iter() {
-            drawing[*flat_index] += (ink * INK_SCALAR) as u8;
+            let ink_delta = (ink * INK_SCALAR) as u8
+            if drawing[*flat_index] < ink_delta {
+                drawing[*flat_index] = 0;
+            } else {
+                drawing[*flat_index] -= ink_delta;
+            }
         }
         prev_ind = index;
     }
