@@ -348,6 +348,7 @@ dependencies = [
  "image",
  "ndarray",
  "rand 0.9.0",
+ "rayon",
 ]
 
 [[package]]

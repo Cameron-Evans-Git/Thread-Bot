@@ -19,7 +19,7 @@ impl StringCanvas {
             let mut middle_map = HashMap::new();
             let radians1 = 2.0 * pi * i1 as f64 / _nail_count as f64;
             let xy1 = ((radius - 1.0) * radians1.cos(), (radius - 1.0) * radians1.sin());
-            for j in 2..(_nail_count+1)/2 {
+            for j in 1..(_nail_count+1)/2 {
                 let mut inner_map = HashMap::new();
                 let i2 = (i1 + j) % _nail_count;
                 let radians2 = 2.0 * pi * i2 as f64 / _nail_count as f64;
@@ -40,6 +40,7 @@ impl StringCanvas {
             }
             stitch_cache.insert(i1, middle_map);
         }
+        println!("made {} connections from {} nails", count, _nail_count);
         StringCanvas {
             _resolution,
             _nail_count,
@@ -60,7 +61,17 @@ impl StringCanvas {
         }
     }
 
-    pub fn get_stitch(&self, source: usize, target: usize) -> &HashMap<usize, f64> {
+    pub fn get_stitch(&self, index_a: usize, index_b: usize) -> &HashMap<usize, f64> {
+        let low = std::cmp::min(index_a, index_b);
+        let high = std::cmp::max(index_a, index_b);
+
+        let source = if low + (self._nail_count/2) < high {
+            high
+        } else { low };
+        let target = if low + (self._nail_count/2) < high {
+            low
+        } else { high };
+
         if let Some(middle_map) = self.stitch_cache.get(&source) {
             if let Some(inner_map) = middle_map.get(&target) {
                 return inner_map;
