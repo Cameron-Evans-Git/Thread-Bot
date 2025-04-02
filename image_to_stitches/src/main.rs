@@ -1,21 +1,23 @@
 mod string_canvas;
 mod ssim;
+mod mse;
 use image::ImageReader as ImageReader;
-use std::path::Path;
+use string_canvas::StringCanvas;
+use std::{os::macos::raw::stat, path::Path};
 use fixedbitset::FixedBitSet;
 use rand::Rng;
 use rayon::prelude::*;
 
 
 const RESOLUTION: usize = 512;
-const NAIL_COUNT: usize = 21;
+const NAIL_COUNT: usize = 201;
 const CANVAS_DIAMETER: u32 = 1000000; // micrometers
 const THREAD_DIAMETER: u32 = 500; // micrometers
 const INK_SCALAR: f64 = (THREAD_DIAMETER as f64 * RESOLUTION as f64) / CANVAS_DIAMETER as f64;
 
 
-const PARENT_COUNT: usize = 10;
-const GENERATION_COUNT: usize = 100;
+const PARENT_COUNT: usize = 20;
+const GENERATION_COUNT: usize = 10000;
 
 fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>, mutation_chance: f64) {
     let mut rng = rand::rng();
@@ -24,14 +26,15 @@ fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>
     for i in 0..pop_size {
         population[i].1 = FixedBitSet::with_capacity(canvas.count);
         for j in 0..canvas.count {
-            population[i].1.set(j, rand::random());
+            population[i].1.set(j, rand::random_bool(0.2));
         }
     }
 
     for _gen in 0..GENERATION_COUNT {
         population.par_iter_mut().for_each(|individual| {
             let drawing = bitset_to_vec(&individual.1, canvas);
-            individual.0 = ssim::ssim(&drawing, target_image, RESOLUTION, 11, 0.01, 0.03);
+            // individual.0 = ssim::ssim(&drawing, target_image, RESOLUTION, 11, 0.01, 0.03);
+            individual.0 = -mse::mse(&drawing, target_image); //negate to work with ssim implementation
         });
 
         //sort population in decending order
@@ -67,18 +70,8 @@ fn bitset_to_vec(bitset: &FixedBitSet, canvas: &string_canvas::StringCanvas) -> 
     let mut prev_ind: usize = 0;
     // 01 02 03 04 12 13 14 23 24 34
     for index in bitset.ones() {
-        for _ in prev_ind..index {
-            target += 1;
-            if target == NAIL_COUNT {
-                source += 1;
-                target = source + 1;
-            }
-            if target == NAIL_COUNT {
-                panic!("Target nail index out of bounds: {} == {}, Source: {}, index: {}", target, NAIL_COUNT, source, index);
-            }
-        }
-        for (flat_index, ink) in canvas.get_stitch(source, target).into_iter() {
-            let ink_delta = (ink * INK_SCALAR) as u8
+        for (flat_index, ink) in canvas.get_stitch_flat(index).into_iter() {
+            let ink_delta = (ink * INK_SCALAR) as u8;
             if drawing[*flat_index] < ink_delta {
                 drawing[*flat_index] = 0;
             } else {
@@ -103,22 +96,58 @@ fn load_image_as_bytes(path: &Path) -> Result<Vec<u8>, image::ImageError> {
     // Resize the image to the desired resolution
     let img = img.resize_exact(RESOLUTION as u32, RESOLUTION as u32, image::imageops::FilterType::Nearest);
     
-    let rgb_img = img.into_luma8();
+    let grey_img = img.into_luma8();
+
+    grey_img.save("./../images.input.png");
     
     // Get raw bytes
-    Ok(rgb_img.as_raw().to_vec())
+    Ok(grey_img.as_raw().to_vec())
 }
 
+fn hill_climb(canvas: &string_canvas::StringCanvas, target_image:&Vec<u8>, weights:&Vec<f64>) -> FixedBitSet {
+    //start with blank canvas state
+    //while !changes_to_state
+    //foreach bit in state, check if flipping will improve the output
+    let mut state = FixedBitSet::with_capacity(canvas.count);
+    let mut image = bitset_to_vec(&state, &canvas);
+    loop {
+        let mut changes = 0;
+
+        for i in (0..canvas.count).shuffle() { //nice to have? Helps find global maximum
+            let slice = canvas.get_stitch_flat(i);
+            let old_fit_sliced = mse::mse_subset_weighted(&target_image, &image, &slice.keys(), weights);
+
+            state.toggle(i);
+            image = bitset_to_vec(&state, &canvas);
+            let new_fit_slice = mse::mse_subset_weighted(&target_image, &image, &slice.keys(), weights);
+
+            if new_fit_slice < old_fit_sliced {
+                changes += 1;
+            } else {
+                state.toggle(i);
+                image = bitset_to_vec(&state, &canvas);
+            }
+        }
+
+        if changes < 10 { // use this to seed genetic? What to do from here?
+            break;
+        }
+        println!("changes: {}", changes);
+        let _ = vec_to_image(&bitset_to_vec(&state, &canvas), Path::new("./../images/output.png"));
+    }
+    state
+}
 fn main() {
     assert!(NAIL_COUNT % 2 == 1, "Nail count must be odd");
     let _canvas = string_canvas::StringCanvas::new(RESOLUTION, NAIL_COUNT);
 
 
-    let path = Path::new("./../images/star.jpg");
+    let path = Path::new("./../images/cat.png");
     match load_image_as_bytes(path) {
         Ok(bytes) => {
             println!("Image converted to {} bytes", bytes.len());
-            genetic_simulation(&_canvas, &bytes, 0.001);
+            // genetic_simulation(&_canvas, &bytes, 0.001);
+            let _ = hill_climb(&_canvas, &bytes, &vec![1.0; bytes.len()]);
         }
         Err(e) => eprintln!("Error: {}", e),
     }

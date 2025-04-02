@@ -1,16 +1,20 @@
 use std::collections::HashMap;
 use bresenham::Bresenham;
+use fixedbitset::FixedBitSet;
 
 
 pub struct StringCanvas {
     _resolution: usize,
     _nail_count: usize,
     stitch_cache: HashMap<usize, HashMap<usize, HashMap<usize, f64>>>, // index1, index2, (flat_index, ink)
-    pub count: usize
+    pub count: usize,
+
+    flat_index_to_stitch: HashMap<usize, (usize, usize)>
 }
 
 impl StringCanvas {
     pub fn new(_resolution: usize, _nail_count: usize) -> Self {
+        let mut flat_index_to_stitch = HashMap::new();
         let mut stitch_cache = HashMap::new();
         let radius = _resolution as f64 / 2.0;
         let pi = std::f64::consts::PI;
@@ -36,6 +40,7 @@ impl StringCanvas {
                     inner_map.insert(flat_index, ink);
                 }
                 middle_map.insert(i2, inner_map);
+                flat_index_to_stitch.insert(count, (i1, i2));
                 count += 1;
             }
             stitch_cache.insert(i1, middle_map);
@@ -45,19 +50,8 @@ impl StringCanvas {
             _resolution,
             _nail_count,
             stitch_cache,
-            count
-        }
-    }
-
-    pub fn _print_stitch_cache(&self) {
-        for (i1, middle_map) in &self.stitch_cache {
-            println!("Nail {}: ", i1);
-            for (i2, inner_map) in middle_map {
-                println!("  Nail {}: ", i2);
-                for (flat_index, ink) in inner_map {
-                    println!("    Index: {}, Ink: {:.3}", flat_index, ink);
-                }
-            }
+            count,
+            flat_index_to_stitch
         }
     }
 
@@ -78,5 +72,10 @@ impl StringCanvas {
             }
         }
         panic!("Stitch not found for source: {} and target: {}!\nWhy are you asking?", source, target);
+    }
+
+    pub fn get_stitch_flat(&self, flat_index: usize) -> &HashMap<usize, f64> {
+        let indexs = self.flat_index_to_stitch.get(&flat_index).unwrap();
+        return self.get_stitch(indexs.0, indexs.1);
     }
 }
