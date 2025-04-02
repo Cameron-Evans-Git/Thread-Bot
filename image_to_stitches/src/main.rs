@@ -19,11 +19,12 @@ const INK_SCALAR: f64 = (THREAD_DIAMETER as f64 * RESOLUTION as f64) / CANVAS_DI
 const PARENT_COUNT: usize = 20;
 const GENERATION_COUNT: usize = 10000;
 
-fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>, mutation_chance: f64) {
+fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>, mutation_chance: f64, seed: &FixedBitSet) {
     let mut rng = rand::rng();
     let pop_size = PARENT_COUNT + ((PARENT_COUNT * (PARENT_COUNT - 1)) / 2);
     let mut population = vec![(-1.0 as f64, FixedBitSet::with_capacity(canvas.count)); pop_size]; //fitness, stitch_key
-    for i in 0..pop_size {
+    population[0].1 = seed.clone();
+    for i in 1..pop_size {
         population[i].1 = FixedBitSet::with_capacity(canvas.count);
         for j in 0..canvas.count {
             population[i].1.set(j, rand::random_bool(0.2));
@@ -33,8 +34,8 @@ fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>
     for _gen in 0..GENERATION_COUNT {
         population.par_iter_mut().for_each(|individual| {
             let drawing = bitset_to_vec(&individual.1, canvas);
-            // individual.0 = ssim::ssim(&drawing, target_image, RESOLUTION, 11, 0.01, 0.03);
-            individual.0 = -mse::mse(&drawing, target_image); //negate to work with ssim implementation
+            individual.0 = ssim::ssim(&drawing, target_image, RESOLUTION, 11, 0.01, 0.03);
+            // individual.0 = -mse::mse(&drawing, target_image); //negate to work with ssim implementation
         });
 
         //sort population in decending order
@@ -146,8 +147,8 @@ fn main() {
     match load_image_as_bytes(path) {
         Ok(bytes) => {
             println!("Image converted to {} bytes", bytes.len());
+            let _seed = hill_climb(&_canvas, &bytes, &vec![1.0; bytes.len()]);
             // genetic_simulation(&_canvas, &bytes, 0.001);
-            let _ = hill_climb(&_canvas, &bytes, &vec![1.0; bytes.len()]);
         }
         Err(e) => eprintln!("Error: {}", e),
     }
