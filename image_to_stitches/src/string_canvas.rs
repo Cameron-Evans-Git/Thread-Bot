@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use bresenham::Bresenham;
-use fixedbitset::FixedBitSet;
 
 
 pub struct StringCanvas {
@@ -28,16 +26,17 @@ impl StringCanvas {
                 let i2 = (i1 + j) % _nail_count;
                 let radians2 = 2.0 * pi * i2 as f64 / _nail_count as f64;
                 let xy2 = ((radius - 1.0) * radians2.cos(), (radius - 1.0) * radians2.sin());
-                let true_distance = ((xy1.0 - xy2.0).powi(2) + (xy1.1 - xy2.1).powi(2)).sqrt();
-                let bresenham: Vec<_> = Bresenham::new(
-                    (xy1.0 as isize, xy1.1 as isize),
-                    (xy2.0 as isize, xy2.1 as isize)
-                ).collect();
-                let ink = 255.0 * bresenham.len() as f64 / true_distance; // POTENTIAL FOR IMPROVEMENT, BASE INK ON DISTANCE TO TRUE LINE
-                for (x, y) in bresenham {
-                    let flat_index: usize = (x + radius as isize) as usize + (((y - radius as isize) * -1) as usize * _resolution);
-                    assert!(flat_index < _resolution * _resolution);
-                    inner_map.insert(flat_index, ink);
+
+                for point in 0.._resolution*_resolution {
+                    let x_corner = point % _resolution;
+                    let y_corner = point / _resolution;
+                    let xy_cart = (x_corner as f64 - radius, (y_corner as f64 - radius) * -1.0);
+
+                    let dist = distance_to_line_segment(xy1, xy2, xy_cart);
+                    if dist > 1.0 {
+                        continue;
+                    }
+                    inner_map.insert(point, (1.0 - dist) * 255.0);
                 }
                 middle_map.insert(i2, inner_map);
                 flat_index_to_stitch.insert(count, (i1, i2));
@@ -78,4 +77,46 @@ impl StringCanvas {
         let indexs = self.flat_index_to_stitch.get(&flat_index).unwrap();
         return self.get_stitch(indexs.0, indexs.1);
     }
+}
+
+// fn distance_to_line(
+//     xy1: (f64, f64),
+//     xy2: (f64, f64),
+//     point: (f64, f64)
+// ) -> f64 {
+//     let a = xy2.1 - xy1.1;
+//     let b = xy1.0 - xy2.0;
+//     let c = xy2.0 * xy1.1 - xy1.0 * xy2.1;
+//     (a * point.0 + b * point.1 + c).abs() / (a * a + b * b).sqrt()
+// }
+
+pub fn distance_to_line_segment(
+    xy1: (f64, f64),
+    xy2: (f64, f64),
+    point: (f64, f64),
+) -> f64 {
+    let (x1, y1) = xy1;
+    let (x2, y2) = xy2;
+    let (x0, y0) = point;
+
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+
+    // Handle case where the segment is just a point
+    if dx == 0.0 && dy == 0.0 {
+        return ((x0 - x1).powi(2) + (y0 - y1).powi(2)).sqrt();
+    }
+
+    // Projection factor (how far along the segment the closest point is)
+    let t = ((x0 - x1) * dx + (y0 - y1) * dy) / (dx * dx + dy * dy);
+
+    // Clamp to the segment (0 ≤ t ≤ 1)
+    let t_clamped = t.max(0.0).min(1.0);
+
+    // Closest point on the segment
+    let closest_x = x1 + t_clamped * dx;
+    let closest_y = y1 + t_clamped * dy;
+
+    // Euclidean distance
+    ((x0 - closest_x).powi(2) + (y0 - closest_y).powi(2)).sqrt()
 }

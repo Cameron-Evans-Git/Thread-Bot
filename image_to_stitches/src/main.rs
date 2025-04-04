@@ -1,11 +1,11 @@
 mod string_canvas;
-mod ssim;
 mod mse;
+use image::{ImageBuffer, Luma};
 use image::ImageReader as ImageReader;
-use string_canvas::StringCanvas;
-use std::{os::macos::raw::stat, path::Path};
+use std::{ path::Path};
 use fixedbitset::FixedBitSet;
 use rand::Rng;
+use rand::prelude::SliceRandom;
 use rayon::prelude::*;
 
 
@@ -34,7 +34,6 @@ fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>
     for _gen in 0..GENERATION_COUNT {
         population.par_iter_mut().for_each(|individual| {
             let drawing = bitset_to_vec(&individual.1, canvas);
-            individual.0 = ssim::ssim(&drawing, target_image, RESOLUTION, 11, 0.01, 0.03);
             // individual.0 = -mse::mse(&drawing, target_image); //negate to work with ssim implementation
         });
 
@@ -66,9 +65,6 @@ fn genetic_simulation(canvas:&string_canvas::StringCanvas, target_image:&Vec<u8>
 fn bitset_to_vec(bitset: &FixedBitSet, canvas: &string_canvas::StringCanvas) -> Vec<u8> {
     assert!(bitset.len() == canvas.count, "Bitset length does not match canvas count");
     let mut drawing = vec![255 as u8; RESOLUTION*RESOLUTION];
-    let mut source: usize = 0;
-    let mut target: usize = 1;
-    let mut prev_ind: usize = 0;
     // 01 02 03 04 12 13 14 23 24 34
     for index in bitset.ones() {
         for (flat_index, ink) in canvas.get_stitch_flat(index).into_iter() {
@@ -79,7 +75,6 @@ fn bitset_to_vec(bitset: &FixedBitSet, canvas: &string_canvas::StringCanvas) -> 
                 drawing[*flat_index] -= ink_delta;
             }
         }
-        prev_ind = index;
     }
     drawing
 }
@@ -96,13 +91,34 @@ fn load_image_as_bytes(path: &Path) -> Result<Vec<u8>, image::ImageError> {
 
     // Resize the image to the desired resolution
     let img = img.resize_exact(RESOLUTION as u32, RESOLUTION as u32, image::imageops::FilterType::Nearest);
-    
+
+    // Convert to grayscale
     let grey_img = img.into_luma8();
 
-    grey_img.save("./../images.input.png");
+    // Create a circular mask
+    let (width, height) = grey_img.dimensions();
+    let mut circular_img = ImageBuffer::new(width, height);
+    
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+    let radius = (width.min(height) as f32 / 2.0).powi(2); // Using squared radius for comparison
+
+    for (x, y, pixel) in circular_img.enumerate_pixels_mut() {
+        let dx = x as f32 - center_x;
+        let dy = y as f32 - center_y;
+        let distance_squared = dx * dx + dy * dy;
+
+        if distance_squared <= radius {
+            *pixel = *grey_img.get_pixel(x, y);
+        } else {
+            *pixel = Luma([255u8]);
+        }
+    }
+
+    let _ = circular_img.save("./../images/input.png");
     
     // Get raw bytes
-    Ok(grey_img.as_raw().to_vec())
+    Ok(circular_img.as_raw().to_vec())
 }
 
 fn hill_climb(canvas: &string_canvas::StringCanvas, target_image:&Vec<u8>, weights:&Vec<f64>) -> FixedBitSet {
@@ -113,14 +129,16 @@ fn hill_climb(canvas: &string_canvas::StringCanvas, target_image:&Vec<u8>, weigh
     let mut image = bitset_to_vec(&state, &canvas);
     loop {
         let mut changes = 0;
+        let mut indexs: Vec<usize> = (0..canvas.count).collect();
+        indexs.shuffle(&mut rand::rng());
 
-        for i in (0..canvas.count).shuffle() { //nice to have? Helps find global maximum
+        for i in indexs {
             let slice = canvas.get_stitch_flat(i);
-            let old_fit_sliced = mse::mse_subset_weighted(&target_image, &image, &slice.keys(), weights);
+            let old_fit_sliced = mse::mse_subset_weighted(&target_image, &image, &slice.keys().collect(), weights);
 
             state.toggle(i);
             image = bitset_to_vec(&state, &canvas);
-            let new_fit_slice = mse::mse_subset_weighted(&target_image, &image, &slice.keys(), weights);
+            let new_fit_slice = mse::mse_subset_weighted(&target_image, &image, &slice.keys().collect(), weights);
 
             if new_fit_slice < old_fit_sliced {
                 changes += 1;
@@ -138,6 +156,7 @@ fn hill_climb(canvas: &string_canvas::StringCanvas, target_image:&Vec<u8>, weigh
     }
     state
 }
+
 fn main() {
     assert!(NAIL_COUNT % 2 == 1, "Nail count must be odd");
     let _canvas = string_canvas::StringCanvas::new(RESOLUTION, NAIL_COUNT);

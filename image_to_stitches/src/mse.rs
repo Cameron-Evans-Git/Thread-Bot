@@ -14,13 +14,13 @@ pub fn mse_weighted(
 pub fn mse_subset_weighted(
     target: &[u8],
     current: &[u8],
-    set: &[usize],
+    set: &Vec<&usize>,
     weights: &[f64]
 ) -> f64 {
     let mut sum: f64 = 0.0;
     for i in set {
-        let add = target[*i] as f64 - current[*i] as f64;
-        sum += add * add * weights[*i];
+        let add = target[**i] as f64 - current[**i] as f64;
+        sum += add * add * weights[**i];
     }
     sum
 }
