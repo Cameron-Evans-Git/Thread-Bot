@@ -7,6 +7,8 @@ use rand::{Rng, rng};
 use rand_distr::StandardNormal;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use rayon::prelude::*;
+use std::sync::Mutex;
 
 type SparseVector = BTreeMap<usize, f32>;
 type DenseVector = Vec<f32>;
@@ -133,31 +135,34 @@ impl CosineLSH {
     }
     
     pub fn query(&self, query_vec: &DenseVector, max_results: usize) -> Vec<(SparseVector, f32)> {
-        let mut seen = HashMap::new();
-        let mut results = Vec::new();
-        
-        for table_idx in 0..self.num_tables {
+        let seen = Mutex::new(HashMap::new());
+        let results = Mutex::new(Vec::new());
+    
+        (0..self.num_tables).into_par_iter().for_each(|table_idx| {
             let signature = self.hash_dense(query_vec, table_idx);
             
             if let Some(bucket) = self.hash_tables[table_idx].get(&signature) {
+                let mut local_results = Vec::new();
+                
                 for vec in bucket {
                     let hashable = HashableSparseVector(vec.clone());
+                    let mut seen = seen.lock().unwrap();
+                    
                     if !seen.contains_key(&hashable) {
                         seen.insert(hashable.clone(), ());
                         let similarity = cosine_similarity(vec, query_vec);
-                        results.push((vec.clone(), similarity));
+                        local_results.push((vec.clone(), similarity));
                     }
                 }
+                
+                results.lock().unwrap().extend(local_results);
             }
-        }
-        
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        results.truncate(max_results);
-        results
-    }
+        });
     
-    pub fn batch_query(&self, queries: &[DenseVector], max_results: usize) -> Vec<Vec<(SparseVector, f32)>> {
-        queries.iter().map(|q| self.query(q, max_results)).collect()
+        let mut final_results = results.into_inner().unwrap();
+        final_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        final_results.truncate(max_results);
+        final_results
     }
 }
 
@@ -192,8 +197,8 @@ fn _generate_random_dense_vector(dim: usize) -> DenseVector {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parameters
-    let r = 2048; // Resolution (grid size)
-    let n = 201;  // Nail count
+    let r = 4096; // Resolution (grid size)
+    let n = 401;  // Nail count
     let filename = format!("line_vectors_r{}_n{}.json", r, n);
     let dataset;
 
@@ -228,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example of using the loaded data with LSH
     let dim = get_dimension(&dataset.vectors);
     assert!(dim == r * r, "Dimension mismatch: expected {}, got {}", r * r, dim);
-    let mut lsh = CosineLSH::new(10, 5, dim); // 10 planes, 5 tables
+    let mut lsh = CosineLSH::new(16, 8, dim); // 10 planes, 5 tables
     
     // Index all vectors
     for vec in dataset.vectors {
@@ -249,17 +254,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn generate_line_vectors(resolution: usize, nail_count: usize, pb: &ProgressBar) -> VectorDataset {
-    let mut vectors = Vec::new();
-    
-    // Generate all unique pairs of nails
-    for i in 0..nail_count {
-        for j in (i + 1)..nail_count {
+    // Pre-compute all nail pairs first
+    let nail_pairs: Vec<(usize, usize)> = (0..nail_count)
+        .flat_map(|i| (i+1..nail_count).map(move |j| (i, j)))
+        .collect();
+
+    // Shared progress bar (wrapped in Mutex for thread safety)
+    let pb_mutex = Mutex::new(pb);
+
+    // Process nail pairs in parallel
+    let vectors = nail_pairs
+        .into_par_iter()
+        .map(|(i, j)| {
             let vector = create_line_vector(resolution, nail_count, i, j);
-            vectors.push(vector);
-            pb.inc(1); // Increment progress bar
-        }
-    }
-    
+            
+            // Update progress bar
+            if let Ok(pb) = pb_mutex.lock() {
+                pb.inc(1);
+            }
+            
+            vector
+        })
+        .collect();
+
     VectorDataset {
         resolution,
         nail_count,
