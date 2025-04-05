@@ -79,17 +79,6 @@ impl StringCanvas {
     }
 }
 
-// fn distance_to_line(
-//     xy1: (f64, f64),
-//     xy2: (f64, f64),
-//     point: (f64, f64)
-// ) -> f64 {
-//     let a = xy2.1 - xy1.1;
-//     let b = xy1.0 - xy2.0;
-//     let c = xy2.0 * xy1.1 - xy1.0 * xy2.1;
-//     (a * point.0 + b * point.1 + c).abs() / (a * a + b * b).sqrt()
-// }
-
 pub fn distance_to_line_segment(
     xy1: (f64, f64),
     xy2: (f64, f64),
