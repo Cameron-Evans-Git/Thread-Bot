@@ -1,9 +1,10 @@
 [package]
-name = "basis_dataset"
+name = "image_decompeser"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+image = "0.25.6"
 indicatif = "0.17.11"
 rand = "0.9.0"
 rand_distr = "0.5.1"
