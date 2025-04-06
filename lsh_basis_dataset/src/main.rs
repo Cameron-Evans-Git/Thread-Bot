@@ -1,3 +1,4 @@
+// AI generated file
 use serde::{Serialize, Deserialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -9,6 +10,8 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use rayon::prelude::*;
 use std::sync::Mutex;
+
+use std::time::Instant;
 
 type SparseVector = BTreeMap<usize, f32>;
 type DenseVector = Vec<f32>;
@@ -124,7 +127,7 @@ impl CosineLSH {
         signature
     }
     
-    pub fn index_vector(&mut self, vec: SparseVector) {
+    pub fn index_vector(&mut self, vec: &SparseVector) {
         for table_idx in 0..self.num_tables {
             let signature = self.hash_sparse(&vec, table_idx);
             self.hash_tables[table_idx]
@@ -193,64 +196,6 @@ fn get_dimension(sparse_vectors: &[SparseVector]) -> usize {
 fn _generate_random_dense_vector(dim: usize) -> DenseVector {
     let mut rng = rng();
     (0..dim).map(|_| rng.random::<f32>()).collect()
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parameters
-    let r = 4096; // Resolution (grid size)
-    let n = 401;  // Nail count
-    let filename = format!("line_vectors_r{}_n{}.json", r, n);
-    let dataset;
-
-    // Check if file already exists
-    if !Path::new(&filename).exists() {
-        println!("Generating line vectors for resolution {} and {} nails...", r, n);
-        
-        // Initialize progress bar
-        let total_pairs = n * (n - 1) / 2; // Number of unique nail pairs
-        let pb = ProgressBar::new(total_pairs as u64);
-        pb.set_style(
-            indicatif::ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-        
-        // Generate all possible line vectors
-        dataset = generate_line_vectors(r, n, &pb);
-        
-        pb.finish_with_message("Generation complete!");
-        
-        println!("Saving to {}...", filename);
-        dataset.save_to_file(&filename)?;
-        println!("Saved {} vectors to {}", dataset.vectors.len(), filename);
-    } else {
-        println!("Loading existing dataset from {}...", filename);
-        dataset = VectorDataset::load_from_file(&filename)?;
-        println!("Loaded {} vectors from file", dataset.vectors.len());
-    }
-    
-    // Example of using the loaded data with LSH
-    let dim = get_dimension(&dataset.vectors);
-    assert!(dim == r * r, "Dimension mismatch: expected {}, got {}", r * r, dim);
-    let mut lsh = CosineLSH::new(16, 8, dim); // 10 planes, 5 tables
-    
-    // Index all vectors
-    for vec in dataset.vectors {
-        lsh.index_vector(vec);
-    }
-    
-    // Create a random query vector
-    let query_vec = _generate_random_dense_vector(dim);
-    
-    // Perform a query
-    let results = lsh.query(&query_vec, 5);
-    println!("Top 5 similar vectors:");
-    for (_vec, similarity) in results {
-        println!("Similarity: {:.4}", similarity);
-    }
-    
-    Ok(())
 }
 
 fn generate_line_vectors(resolution: usize, nail_count: usize, pb: &ProgressBar) -> VectorDataset {
@@ -330,4 +275,119 @@ fn point_under_line(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32
     
     // Value between 0 and 1 based on distance from line
     1.0 - distance.min(1.0)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parameters
+    let r = 2048; // Resolution (grid size)
+    let n = 201;  // Nail count
+    let filename = format!("line_vectors_r{}_n{}.json", r, n);
+    let dataset;
+
+    // Check if file already exists
+    if !Path::new(&filename).exists() {
+        println!("Generating line vectors for resolution {} and {} nails...", r, n);
+        
+        // Initialize progress bar
+        let total_pairs = n * (n - 1) / 2; // Number of unique nail pairs
+        let pb = ProgressBar::new(total_pairs as u64);
+        pb.set_style(
+            indicatif::ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        
+        // Generate all possible line vectors
+        dataset = generate_line_vectors(r, n, &pb);
+        
+        pb.finish_with_message("Generation complete!");
+        
+        println!("Saving to {}...", filename);
+        dataset.save_to_file(&filename)?;
+        println!("Saved {} vectors to {}", dataset.vectors.len(), filename);
+    } else {
+        println!("Loading existing dataset from {}...", filename);
+        dataset = VectorDataset::load_from_file(&filename)?;
+        println!("Loaded {} vectors from file", dataset.vectors.len());
+    }
+    
+    // Example of using the loaded data with LSH
+    let dim = get_dimension(&dataset.vectors);
+    assert!(dim == r * r, "Dimension mismatch: expected {}, got {}", r * r, dim);
+    let mut lsh = CosineLSH::new(16, 8, dim); // 10 planes, 5 tables
+    
+    // Index all vectors
+    for vec in &dataset.vectors {
+        lsh.index_vector(&vec);
+    }
+    
+    // Create a random query vector
+    let query_vec = _generate_random_dense_vector(dim);
+    
+    // Perform a query
+    let results = lsh.query(&query_vec, 5);
+    println!("Top 5 similar vectors:");
+    for (_vec, similarity) in results {
+        println!("Similarity: {:.4}", similarity);
+    }
+
+    benchmark_lsh_vs_naive(&dataset);
+    
+    Ok(())
+}
+
+fn benchmark_lsh_vs_naive(dataset: &VectorDataset) {
+    let dim = get_dimension(&dataset.vectors);
+    let query_vec = _generate_random_dense_vector(dim);
+    
+    // Benchmark naive approach
+    println!("Benchmarking naive cosine similarity search...");
+    let start_naive = Instant::now();
+    let naive_results = naive_cosine_search(&dataset.vectors, &query_vec, 5);
+    let duration_naive = start_naive.elapsed();
+    
+    println!("Naive search took: {:?}", duration_naive);
+    println!("Top results:");
+    for (i, (_, similarity)) in naive_results.iter().enumerate() {
+        println!("{}. Similarity: {:.4}", i+1, similarity);
+    }
+    
+    // Benchmark LSH approach
+    println!("\nBenchmarking LSH cosine similarity search...");
+    
+    // Measure indexing time
+    println!("Building LSH index...");
+    let start_index = Instant::now();
+    let mut lsh = CosineLSH::new(16, 8, dim); // 16 planes, 8 tables
+    for vec in &dataset.vectors {
+        lsh.index_vector(&vec);
+    }
+    let duration_index = start_index.elapsed();
+    println!("Indexing took: {:?}", duration_index);
+    
+    // Measure query time
+    let start_query = Instant::now();
+    let lsh_results = lsh.query(&query_vec, 5);
+    let duration_query = start_query.elapsed();
+    
+    println!("LSH query took: {:?}", duration_query);
+    println!("Top results:");
+    for (i, (_, similarity)) in lsh_results.iter().enumerate() {
+        println!("{}. Similarity: {:.4}", i+1, similarity);
+    }
+    
+    println!("\nSpeedup factor: {:.1}x", 
+        duration_naive.as_secs_f64() / duration_query.as_secs_f64());
+}
+
+fn naive_cosine_search(vectors: &[SparseVector], query: &DenseVector, k: usize) -> Vec<(SparseVector, f32)> {
+    let mut results: Vec<(SparseVector, f32)> = vectors
+        .iter()
+        .map(|vec| (vec.clone(), cosine_similarity(vec, query)))
+        .collect();
+    
+    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    results.truncate(k);
+    results
 }
