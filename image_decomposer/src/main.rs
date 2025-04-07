@@ -1,4 +1,3 @@
-// AI generated file
 use serde::{Serialize, Deserialize};
 use std::collections::{BTreeMap};
 use std::f32::consts::PI;
@@ -10,10 +9,8 @@ use std::path::Path;
 use statrs::distribution::{Normal, ContinuousCDF};
 
 
-// Ideally resolution is at least double canvas size and nail count is over 200
-const RESOLUTION: usize = 2048;
-const NAIL_COUNT: usize = 200;
-const THREAD_WIDTH: usize = 5000; // measured in units of how many threads are needed to cross the canvas
+const RESOLUTION: usize = 8192;
+const NAIL_COUNT: usize = 400;
 
 type SparseVector = BTreeMap<usize, f32>;
 type DenseVector = Vec<f32>;
@@ -201,10 +198,7 @@ fn create_line_vector(resolution: usize, nail_count: usize, nail1: usize, nail2:
             let value = point_under_line(
                 x as f32, y as f32, 
                 x1_scaled, y1_scaled, 
-                x2_scaled, y2_scaled,
-                1.0,
-                2.0,
-                0.6
+                x2_scaled, y2_scaled
             );
             
             if value > 0.0 {
@@ -219,44 +213,21 @@ fn create_line_vector(resolution: usize, nail_count: usize, nail1: usize, nail2:
     vector
 }
 
-fn point_under_line(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32, core_width: f32, falloff_width: f32, max_darkness: f32) -> f32 {
-    // Vector from line start to point
-    let dx = px - x1;
-    let dy = py - y1;
+fn point_under_line(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    // Calculate the position relative to the line
+    let d = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
     
-    // Line direction vector
-    let lx = x2 - x1;
-    let ly = y2 - y1;
-    
-    // Calculate perpendicular distance
-    let cross = dx * ly - dy * lx;
-    let line_length_sq = lx * lx + ly * ly;
-    
-    // Early exit if line is degenerate (zero length)
-    if line_length_sq < f32::EPSILON {
-        return 0.0;
+    let line_length = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
+    if line_length < f32::EPSILON {
+        return 0.0; // Avoid division by zero
     }
+    let distance = d.abs() / line_length;
+
     
-    // Normalized distance from line (signed)
-    let distance = cross / line_length_sq.sqrt();
-    
-    // Convert to absolute distance in "thread widths" units
-    let thread_width = RESOLUTION as f32 / THREAD_WIDTH as f32;
-    
-    // The string is approximately 1 thread width wide
-    // Use smooth falloff within ±1.5 thread widths
-    let normalized_dist = distance.abs() / thread_width;
-    
-    if normalized_dist > (core_width + falloff_width) {
-        return 0.0;
-    }
-    
-    if normalized_dist <= core_width {
-        max_darkness * (1.0 - (normalized_dist / core_width).powf(0.5))
-    } else {
-        let t = (normalized_dist - core_width) / falloff_width;
-        max_darkness * 0.5 * (1.0 - t * t)
-    }
+    // Value between 0 and 1 based on distance from line
+    ((1.0 - distance))
+        .max(0.0)
+        .min(1.0)
 }
 
 fn integral_normal_pdf(a: f64, b: f64, mean: f64, sigma: f64) -> f64 {
@@ -274,7 +245,7 @@ fn greedy_tophat(
     let mut used_indices = vec![];
     
     // Precompute initial similarities for all lines
-    println!("Precomputing initial similaritie scores...");
+    println!("Precomputing initial similarity scores...");
     let mut candidate_lines: Vec<(usize, f32)> = dataset.vectors.par_iter()
         .enumerate()
         .map(|(i, line)| {
@@ -301,7 +272,7 @@ fn greedy_tophat(
         used_indices.push(best_index);
         selection_pb.inc(1);
         
-        // Update remaining candidates (only check top N to save time)
+        // Update remaining candidates (only check top 5% to save time)
         let top_n = candidate_lines.len()/20;
         candidate_lines[..top_n]
             .par_iter_mut()
