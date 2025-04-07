@@ -7,10 +7,13 @@ use rayon::prelude::*;
 use std::sync::Mutex;
 use image::{imageops, GrayImage, Luma};
 use std::path::Path;
+use statrs::distribution::{Normal, ContinuousCDF};
 
-const RESOLUTION: usize = 4096;
-const NAIL_COUNT: usize = 300;
-const CANVAS_SIZE: usize = 2500; // measured in units of thread widths
+
+// Ideally resolution is at least double canvas size and nail count is over 200
+const RESOLUTION: usize = 2048;
+const NAIL_COUNT: usize = 200;
+const THREAD_WIDTH: usize = 5000; // measured in units of how many threads are needed to cross the canvas
 
 type SparseVector = BTreeMap<usize, f32>;
 type DenseVector = Vec<f32>;
@@ -86,24 +89,46 @@ fn load_image_as_dense_vector( image_path: &str, resolution: usize, ) -> Result<
     Ok(dense_vector)
 }
 
-// returns the percentage of interference that is constructive
-// TODO make this better :(
-fn con_similarity(sparse: &SparseVector, dense: &DenseVector) -> f32 {
-    let mut constructive = 0.0;
-    let mut destructive = 0.0;
-    sparse.iter()
-        .for_each(|(&idx, &value)| {
-            let dense_value = dense.get(idx).unwrap_or(&0.0);
+// -1.0 to 1.0, -1 means line is bad, 1 means line is good, 0 means line is neutral
+fn score_line(line: &SparseVector, target: &DenseVector, current_approximation: &DenseVector) -> f32 {
+    let mut total_improvement = 0.0;
+    let mut max_possible_improvement = 0.0;
+    let mut count = 0;
 
-            if value > *dense_value {
-                constructive += dense_value;
-                destructive += value - dense_value;
-            } else {
-                constructive += value;
-            }
-        });
+    for (&i, &line_value) in line {
+        let current = current_approximation[i];
+        let target_value = target[i];
+        
+        // Calculate what the value would be if we add this line
+        let new_value = (current + line_value).min(1.0);
+        
+        // Current error (distance from target)
+        let current_error = (target_value - current).abs();
+        
+        // New error after adding this line
+        let new_error = (target_value - new_value).abs();
+        
+        // Improvement is reduction in error
+        let improvement = current_error - new_error;
+        
+        // Maximum possible improvement for this pixel
+        let max_improvement = current_error;
+        
+        total_improvement += improvement;
+        max_possible_improvement += max_improvement;
+        count += 1;
+    }
 
-    constructive / (constructive + destructive)
+    if count == 0 {
+        return 0.0;  // empty line is neutral
+    }
+
+    // Normalized score based on actual vs possible improvement
+    if max_possible_improvement > 0.0 {
+        (total_improvement / max_possible_improvement).clamp(-1.0, 1.0)
+    } else {
+        0.0  // no possible improvement means neutral score
+    }
 }
 
 fn generate_line_vectors(resolution: usize, nail_count: usize, pb: &ProgressBar) -> VectorDataset {
@@ -153,19 +178,40 @@ fn create_line_vector(resolution: usize, nail_count: usize, nail1: usize, nail2:
     let y1_scaled = y1 * scale + scale;
     let x2_scaled = x2 * scale + scale;
     let y2_scaled = y2 * scale + scale;
+
+    // Center and radius for the circular crop
+    let center = (resolution as f32 / 2.0, resolution as f32 / 2.0);
+    let radius = (resolution as f32 / 2.0) - 1.0;
     
     // For each point in the grid, calculate if it's under the line
     for y in 0..resolution {
+        let mut found = false;
         for x in 0..resolution {
+            // Calculate distance from center
+            let dx = x as f32 - center.0;
+            let dy = y as f32 - center.1;
+            let distance = (dx * dx + dy * dy).sqrt();
+
+            if distance > radius {
+                continue;
+            }
+
+
             let index = y * resolution + x;
             let value = point_under_line(
                 x as f32, y as f32, 
                 x1_scaled, y1_scaled, 
-                x2_scaled, y2_scaled
+                x2_scaled, y2_scaled,
+                1.0,
+                2.0,
+                0.6
             );
             
             if value > 0.0 {
                 vector.insert(index, value);
+                found = true;
+            } else if found {
+                break; // No need to check further in this row
             }
         }
     }
@@ -173,75 +219,103 @@ fn create_line_vector(resolution: usize, nail_count: usize, nail1: usize, nail2:
     vector
 }
 
-fn point_under_line(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    // Calculate the position relative to the line
-    let d = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
+fn point_under_line(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32, core_width: f32, falloff_width: f32, max_darkness: f32) -> f32 {
+    // Vector from line start to point
+    let dx = px - x1;
+    let dy = py - y1;
     
-    // uses triangular area to determine weight, switch to bell curve?
-    let line_length = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
-    let distance = d.abs() / line_length;
+    // Line direction vector
+    let lx = x2 - x1;
+    let ly = y2 - y1;
+    
+    // Calculate perpendicular distance
+    let cross = dx * ly - dy * lx;
+    let line_length_sq = lx * lx + ly * ly;
+    
+    // Early exit if line is degenerate (zero length)
+    if line_length_sq < f32::EPSILON {
+        return 0.0;
+    }
+    
+    // Normalized distance from line (signed)
+    let distance = cross / line_length_sq.sqrt();
+    
+    // Convert to absolute distance in "thread widths" units
+    let thread_width = RESOLUTION as f32 / THREAD_WIDTH as f32;
+    
+    // The string is approximately 1 thread width wide
+    // Use smooth falloff within ±1.5 thread widths
+    let normalized_dist = distance.abs() / thread_width;
+    
+    if normalized_dist > (core_width + falloff_width) {
+        return 0.0;
+    }
+    
+    if normalized_dist <= core_width {
+        max_darkness * (1.0 - (normalized_dist / core_width).powf(0.5))
+    } else {
+        let t = (normalized_dist - core_width) / falloff_width;
+        max_darkness * 0.5 * (1.0 - t * t)
+    }
+}
 
-    let included_distance = RESOLUTION as f32 / CANVAS_SIZE as f32;
-    
-    // Value between 0 and 1 based on distance from line
-    ((1.0 - (distance/included_distance)) / included_distance)
-        .max(0.0)
-        .min(1.0)
+fn integral_normal_pdf(a: f64, b: f64, mean: f64, sigma: f64) -> f64 {
+    let normal = Normal::new(mean, sigma).expect("Invalid parameters");
+    normal.cdf(b) - normal.cdf(a)
 }
 
 fn greedy_tophat(
     dataset: &VectorDataset,
     target: &DenseVector,
     max_lines: usize,
-    similarity_threshold: f32,
-    pb: &ProgressBar,
+    selection_pb: &ProgressBar,
 ) -> Vec<usize> {
-    let mut current_approximation = target.clone();
+    let mut current_approximation = vec![0.0; dataset.resolution * dataset.resolution];
     let mut used_indices = vec![];
     
     // Precompute initial similarities for all lines
+    println!("Precomputing initial similaritie scores...");
     let mut candidate_lines: Vec<(usize, f32)> = dataset.vectors.par_iter()
         .enumerate()
         .map(|(i, line)| {
-            (i, con_similarity(line, target))
+            (i, score_line(line, target, &current_approximation))
         })
         .collect();
-    
     // Sort candidates by initial similarity (highest first)
     candidate_lines.par_sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
 
-
-    for _ in 0..max_lines {
+    println!("Making line selections...");
+    for _ in 0..max_lines.min(candidate_lines.len()) {
         // Find the best available line
         let (best_index, best_similarity) = candidate_lines[0];
 
-        // Stop if no line improves the approximation enough
-        // if best_similarity < similarity_threshold {
-        //     break;
-        // }
+        // Stop if no line improves the approximation
+        if best_similarity < 0.0 {
+            break;
+        }
 
         // Add the best line to our approximation
-        remove_sparse_from_dense(&mut current_approximation, &dataset.vectors[best_index]);
+        add_sparse_to_dense(&mut current_approximation, &dataset.vectors[best_index]);
         candidate_lines.retain(|(i, _)| *i != best_index);
         used_indices.push(best_index);
-        pb.inc(1);
+        selection_pb.inc(1);
         
         // Update remaining candidates (only check top N to save time)
-        let top_n = candidate_lines.len().isqrt();
+        let top_n = candidate_lines.len()/20;
         candidate_lines[..top_n]
             .par_iter_mut()
             .enumerate()
             .for_each(|(_i, (candidate_idx, similarity))| {
                 let line = &dataset.vectors[*candidate_idx];
-                *similarity = con_similarity(line, &current_approximation);
+                *similarity = score_line(line, target, &current_approximation);
             });
         
         // Re-sort the top candidates
         candidate_lines[..top_n].par_sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     }
 
-    pb.finish_with_message("Line selection complete!");
+    selection_pb.finish_with_message("Line selection complete!");
     used_indices.into_iter().collect()
 }
 
@@ -266,8 +340,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Initialize progress bar
     let total_pairs = NAIL_COUNT * (NAIL_COUNT - 1) / 2; // Number of unique nail pairs
-    let pb = ProgressBar::new(total_pairs as u64);
-    pb.set_style(
+    let dataset_pb: ProgressBar = ProgressBar::new(total_pairs as u64);
+    dataset_pb.set_style(
         indicatif::ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
             .unwrap()
@@ -275,26 +349,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     
     // Generate all possible line vectors
-    let dataset = generate_line_vectors(RESOLUTION, NAIL_COUNT, &pb);
-    
-    pb.finish_with_message("Generation complete!");
-        
+    println!("Building database lines...");
+    let dataset = generate_line_vectors(RESOLUTION, NAIL_COUNT, &dataset_pb);
+            
     let query_vec = load_image_as_dense_vector("./images/star.jpg", RESOLUTION)?;
     
     // Find matching lines
-    let max_lines = 1000; //TODO this is arbitrary
-    let similarity_threshold = 0.01;
-    
-    // Initialize progress bar for greedy selection
-    let selection_pb = ProgressBar::new((max_lines) as u64);
+    let max_lines = NAIL_COUNT*NAIL_COUNT/4;
+
+    let selection_pb = ProgressBar::new(max_lines as u64);
     selection_pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) | {msg}")
             .unwrap()
             .progress_chars("#>-"),
     );
+
     
-    let selected_lines = greedy_tophat(&dataset, &query_vec, max_lines, similarity_threshold, &selection_pb);
+    let selected_lines = greedy_tophat(&dataset, &query_vec, max_lines, &selection_pb);
 
     println!("Selected {} lines:", selected_lines.len());
 
